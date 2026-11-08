@@ -21,4 +21,5 @@ public:
     static Matrix4 reflectionYZ();
     Matrix4 operator*(const Matrix4& other) const;
     Point3D transformPoint(const Point3D& point) const;
+    Point3D transformNormal(const Point3D& normal) const;
 };

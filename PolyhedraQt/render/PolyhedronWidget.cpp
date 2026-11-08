@@ -1,4 +1,3 @@
-
 #include "PolyhedronWidget.h"
 
 #include "../geometry/PolyhedronFactory.h"
@@ -8,7 +7,6 @@
 #include <QImage>
 #include <QPaintEvent>
 #include <QSizePolicy>
-#include <QString>
 
 #include <algorithm>
 #include <cmath>
@@ -22,7 +20,8 @@ struct V3 {
     double z;
 };
 
-V3 sub(V3 a, V3 b) {
+V3 subtract(const V3& a, const V3& b)
+{
     return {
         a.x - b.x,
         a.y - b.y,
@@ -30,7 +29,8 @@ V3 sub(V3 a, V3 b) {
     };
 }
 
-V3 cross(V3 a, V3 b) {
+V3 cross(const V3& a, const V3& b)
+{
     return {
         a.y * b.z - a.z * b.y,
         a.z * b.x - a.x * b.z,
@@ -38,22 +38,24 @@ V3 cross(V3 a, V3 b) {
     };
 }
 
-double dot(V3 a, V3 b) {
+double dot(const V3& a, const V3& b)
+{
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-V3 norm(V3 a) {
-    double length = std::sqrt(dot(a, a));
+V3 normalize(const V3& vector)
+{
+    const double length = std::sqrt(dot(vector, vector));
 
-    if (length > 1e-12) {
-        return {
-            a.x / length,
-            a.y / length,
-            a.z / length
-        };
+    if (length < 1e-12) {
+        return {0.0, 0.0, 0.0};
     }
 
-    return {0.0, 0.0, 0.0};
+    return {
+        vector.x / length,
+        vector.y / length,
+        vector.z / length
+    };
 }
 
 struct Vertex {
@@ -64,12 +66,28 @@ struct Vertex {
     QPointF screen;
 };
 
-} // namespace
+bool hasNormals(const Polyhedron& polyhedron)
+{
+    for (const Polygon& face : polyhedron.faces) {
+        const double length = std::sqrt(
+            face.normal.x * face.normal.x
+            + face.normal.y * face.normal.y
+            + face.normal.z * face.normal.z
+            );
 
+        if (length < 1e-12) {
+            return false;
+        }
+    }
+
+    return !polyhedron.faces.isEmpty();
+}
+
+}
 
 PolyhedronWidget::PolyhedronWidget(QWidget* parent)
-    : QWidget(parent) {
-
+    : QWidget(parent)
+{
     setMinimumSize(280, 280);
 
     setSizePolicy(
@@ -87,41 +105,45 @@ PolyhedronWidget::PolyhedronWidget(QWidget* parent)
         );
 }
 
-
-void PolyhedronWidget::setPolyhedron(const Polyhedron& p) {
+void PolyhedronWidget::setPolyhedron(const Polyhedron& p)
+{
     polyhedron = p;
 
-    polyhedron.calculateNormals();
+    // Первоначально вычисляем нормали только тогда,
+    // когда они ещё не были заданы.
+    if (!hasNormals(polyhedron)) {
+        polyhedron.calculateNormals();
+    }
 
     update();
 }
 
-
-void PolyhedronWidget::setProjectionType(ProjectionType type) {
+void PolyhedronWidget::setProjectionType(ProjectionType type)
+{
     projectionType = type;
     update();
 }
 
-
-void PolyhedronWidget::setBackFaceCulling(bool enabled) {
+void PolyhedronWidget::setBackFaceCulling(bool enabled)
+{
     cullingEnabled = enabled;
     update();
 }
 
-
-void PolyhedronWidget::setZBufferEnabled(bool enabled) {
+void PolyhedronWidget::setZBufferEnabled(bool enabled)
+{
     zBufferEnabled = enabled;
     update();
 }
 
-
 void PolyhedronWidget::setCamera(
-    double yaw,
-    double pitch,
+    double yawDegrees,
+    double pitchDegrees,
     double distance
-    ) {
-    cameraYaw = yaw;
-    cameraPitch = pitch;
+    )
+{
+    cameraYaw = yawDegrees;
+    cameraPitch = pitchDegrees;
     cameraDistance = distance;
 
     camera.orbit(
@@ -133,22 +155,16 @@ void PolyhedronWidget::setCamera(
     update();
 }
 
-
-void PolyhedronWidget::paintEvent(QPaintEvent*) {
-
+void PolyhedronWidget::paintEvent(QPaintEvent*)
+{
     QPainter out(this);
 
     out.setRenderHint(QPainter::Antialiasing, true);
-
-    out.fillRect(
-        rect(),
-        QColor(248, 249, 251)
-        );
+    out.fillRect(rect(), QColor(248, 249, 251));
 
     if (polyhedron.vertices.isEmpty()) {
         return;
     }
-
 
     QVector<Polyhedron> objects;
 
@@ -158,6 +174,8 @@ void PolyhedronWidget::paintEvent(QPaintEvent*) {
         PolyhedronFactory::create(
             PolyhedronFactory::Hexahedron
             );
+
+    leftPolyhedron.calculateNormals();
 
     leftPolyhedron.applyMatrix(
         Matrix4::translation(-3.0, 0.0, 0.0)
@@ -170,48 +188,60 @@ void PolyhedronWidget::paintEvent(QPaintEvent*) {
             PolyhedronFactory::Octahedron
             );
 
+    rightPolyhedron.calculateNormals();
+
     rightPolyhedron.applyMatrix(
         Matrix4::translation(3.0, 0.0, -0.4)
         );
 
     objects.append(rightPolyhedron);
 
+    const double aspect =
+        width() / double(qMax(1, height()));
 
+    if (projectionType == ProjectionType::Perspective) {
+        camera.setPerspective(
+            0.82,
+            aspect,
+            0.1,
+            100.0
+            );
+    } else {
+        camera.setOrthographic(
+            6.8,
+            aspect,
+            0.1,
+            100.0
+            );
+    }
 
-    camera.setPerspective(
-        0.82,
-        width() / double(qMax(1, height())),
-        0.1,
-        100.0
-        );
-
-    const V3 cameraPos{
+    const V3 cameraPosition = {
         camera.position.x,
         camera.position.y,
         camera.position.z
     };
 
-    const V3 forward = norm({
-        -cameraPos.x,
-        -cameraPos.y,
-        -cameraPos.z
+    const V3 forward = normalize({
+        camera.direction.x,
+        camera.direction.y,
+        camera.direction.z
     });
 
-    const V3 worldUp{0.0, 1.0, 0.0};
+    V3 worldUp = {0.0, 1.0, 0.0};
 
-    const V3 right = norm(
+    if (std::abs(dot(forward, worldUp)) > 0.999) {
+        worldUp = {0.0, 0.0, 1.0};
+    }
+
+    const V3 right = normalize(
         cross(forward, worldUp)
         );
 
-    const V3 up = norm(
+    const V3 up = normalize(
         cross(right, forward)
         );
 
-    const double focal =
-        std::min(width(), height())
-        * camera.projectionMatrix.m[1][1]
-        * 0.5;
-
+    const Matrix4& projection = camera.projectionMatrix;
 
     QImage image(
         size(),
@@ -220,60 +250,75 @@ void PolyhedronWidget::paintEvent(QPaintEvent*) {
 
     image.fill(QColor(248, 249, 251));
 
-    QVector<double> zbuf(
+    QVector<double> zBuffer(
         width() * height(),
         std::numeric_limits<double>::infinity()
         );
 
-
     for (const Polyhedron& object : objects) {
 
-        QVector<Vertex> verts;
+        QVector<Vertex> transformedVertices;
 
-        verts.reserve(object.vertices.size());
+        transformedVertices.reserve(
+            object.vertices.size()
+            );
 
-        for (const Point3D& p : object.vertices) {
+        for (const Point3D& point : object.vertices) {
 
-            V3 rel = sub(
-                {p.x, p.y, p.z},
-                cameraPos
+            const V3 relative = subtract(
+                {
+                    point.x,
+                    point.y,
+                    point.z
+                },
+                cameraPosition
                 );
 
-            const double cx = dot(rel, right);
-            const double cy = dot(rel, up);
-            const double cz = dot(rel, forward);
+            const double cameraX = dot(relative, right);
+            const double cameraY = dot(relative, up);
+            const double cameraZ = dot(relative, forward);
 
-            Vertex v;
+            Vertex vertex;
 
-            v.x = cx;
-            v.y = cy;
-            v.z = cz;
+            vertex.x = cameraX;
+            vertex.y = cameraY;
+            vertex.z = cameraZ;
 
-            if (projectionType == ProjectionType::Perspective) {
+            const double clipX =
+                projection.m[0][0] * cameraX
+                + projection.m[0][1] * cameraY
+                + projection.m[0][2] * cameraZ
+                + projection.m[0][3];
 
-                if (cz <= 0.05) {
+            const double clipY =
+                projection.m[1][0] * cameraX
+                + projection.m[1][1] * cameraY
+                + projection.m[1][2] * cameraZ
+                + projection.m[1][3];
 
-                    v.screen = QPointF(-10000, -10000);
+            const double clipW =
+                projection.m[3][0] * cameraX
+                + projection.m[3][1] * cameraY
+                + projection.m[3][2] * cameraZ
+                + projection.m[3][3];
 
-                } else {
-
-                    v.screen = QPointF(
-                        width() / 2.0 + focal * cx / cz,
-                        height() / 2.0 - focal * cy / cz
-                        );
-                }
-
+            if (std::abs(clipW) < 1e-12) {
+                vertex.screen = QPointF(-10000.0, -10000.0);
+            } else if (projectionType == ProjectionType::Perspective &&
+                       cameraZ <= 0.05) {
+                vertex.screen = QPointF(-10000.0, -10000.0);
             } else {
+                const double normalizedX = clipX / clipW;
+                const double normalizedY = clipY / clipW;
 
-                v.screen = QPointF(
-                    width() / 2.0 + focal * cx / cameraDistance,
-                    height() / 2.0 - focal * cy / cameraDistance
+                vertex.screen = QPointF(
+                    (normalizedX + 1.0) * width() / 2.0,
+                    (1.0 - normalizedY) * height() / 2.0
                     );
             }
 
-            verts.append(v);
+            transformedVertices.append(vertex);
         }
-
 
         for (const Polygon& face : object.faces) {
 
@@ -284,8 +329,9 @@ void PolyhedronWidget::paintEvent(QPaintEvent*) {
             bool indicesValid = true;
 
             for (int index : face.indices) {
+                if (index < 0 ||
+                    index >= transformedVertices.size()) {
 
-                if (index < 0 || index >= verts.size()) {
                     indicesValid = false;
                     break;
                 }
@@ -295,59 +341,77 @@ void PolyhedronWidget::paintEvent(QPaintEvent*) {
                 continue;
             }
 
+            V3 faceCenter = {
+                0.0,
+                0.0,
+                0.0
+            };
 
-            V3 normal{
+            for (int index : face.indices) {
+                const Point3D& point =
+                    object.vertices[index];
+
+                faceCenter.x += point.x;
+                faceCenter.y += point.y;
+                faceCenter.z += point.z;
+            }
+
+            const double faceVertexCount =
+                face.indices.size();
+
+            faceCenter.x /= faceVertexCount;
+            faceCenter.y /= faceVertexCount;
+            faceCenter.z /= faceVertexCount;
+
+            V3 viewVector;
+
+            if (projectionType == ProjectionType::Perspective) {
+
+                viewVector = subtract(
+                    cameraPosition,
+                    faceCenter
+                    );
+
+            } else {
+
+                viewVector = {
+                    -camera.direction.x,
+                    -camera.direction.y,
+                    -camera.direction.z
+                };
+            }
+
+            viewVector = normalize(viewVector);
+
+            const V3 normal = {
                 face.normal.x,
                 face.normal.y,
                 face.normal.z
             };
 
-            V3 faceCenter{0.0, 0.0, 0.0};
+            const double visibility = dot(normal, viewVector);
 
-            for (int index : face.indices) {
-
-                faceCenter.x += object.vertices[index].x;
-                faceCenter.y += object.vertices[index].y;
-                faceCenter.z += object.vertices[index].z;
-            }
-
-            double count = double(face.indices.size());
-
-            faceCenter.x /= count;
-            faceCenter.y /= count;
-            faceCenter.z /= count;
-
-            V3 viewDirection = sub(
-                cameraPos,
-                faceCenter
-                );
-
-            if (
-                cullingEnabled
-                && dot(normal, viewDirection) <= 0.0
-                ) {
+            if (cullingEnabled && visibility <= 0.0) {
                 continue;
             }
 
+            for (int k = 1; k + 1 < face.indices.size(); ++k) {
 
-            for (
-                int k = 1;
-                k + 1 < face.indices.size();
-                ++k
-                ) {
+                const Vertex& a =
+                    transformedVertices[face.indices[0]];
 
-                const Vertex a = verts[face.indices[0]];
-                const Vertex b = verts[face.indices[k]];
-                const Vertex c = verts[face.indices[k + 1]];
+                const Vertex& b =
+                    transformedVertices[face.indices[k]];
 
-                if (
-                    a.screen.x() < -1000
-                    || b.screen.x() < -1000
-                    || c.screen.x() < -1000
-                    ) {
+                const Vertex& c =
+                    transformedVertices[face.indices[k + 1]];
+
+                if (a.screen.x() < -1000.0 ||
+                    b.screen.x() < -1000.0 ||
+                    c.screen.x() < -1000.0) {
+
                     continue;
                 }
-
 
                 const double x0 = a.screen.x();
                 const double y0 = a.screen.y();
@@ -366,77 +430,75 @@ void PolyhedronWidget::paintEvent(QPaintEvent*) {
                     continue;
                 }
 
-
                 const int minX = qBound(
                     0,
-                    int(std::floor(std::min({x0, x1, x2}))),
+                    static_cast<int>(
+                        std::floor(std::min({x0, x1, x2}))
+                        ),
                     width() - 1
                     );
 
                 const int maxX = qBound(
                     0,
-                    int(std::ceil(std::max({x0, x1, x2}))),
+                    static_cast<int>(
+                        std::ceil(std::max({x0, x1, x2}))
+                        ),
                     width() - 1
                     );
 
                 const int minY = qBound(
                     0,
-                    int(std::floor(std::min({y0, y1, y2}))),
+                    static_cast<int>(
+                        std::floor(std::min({y0, y1, y2}))
+                        ),
                     height() - 1
                     );
 
                 const int maxY = qBound(
                     0,
-                    int(std::ceil(std::max({y0, y1, y2}))),
+                    static_cast<int>(
+                        std::ceil(std::max({y0, y1, y2}))
+                        ),
                     height() - 1
                     );
 
                 for (int y = minY; y <= maxY; ++y) {
-
                     for (int x = minX; x <= maxX; ++x) {
 
-                        const double px = x + 0.5;
-                        const double py = y + 0.5;
-
+                        const double pixelX = x + 0.5;
+                        const double pixelY = y + 0.5;
 
                         const double w0 =
                             (
-                                (x1 - px) * (y2 - py)
-                                - (y1 - py) * (x2 - px)
+                                (x1 - pixelX) * (y2 - pixelY)
+                                - (y1 - pixelY) * (x2 - pixelX)
                                 ) / area;
 
                         const double w1 =
                             (
-                                (x2 - px) * (y0 - py)
-                                - (y2 - py) * (x0 - px)
+                                (x2 - pixelX) * (y0 - pixelY)
+                                - (y2 - pixelY) * (x0 - pixelX)
                                 ) / area;
 
-                        const double w2 = 1.0 - w0 - w1;
-                        if (
-                            w0 < 0.0
-                            || w1 < 0.0
-                            || w2 < 0.0
-                            ) {
+                        const double w2 =
+                            1.0 - w0 - w1;
+
+                        if (w0 < 0.0 ||
+                            w1 < 0.0 ||
+                            w2 < 0.0) {
+
                             continue;
                         }
 
                         double z;
 
-                        if (
-                            projectionType
-                            == ProjectionType::Perspective
-                            ) {
+                        if (projectionType == ProjectionType::Perspective) {
 
-                            const double inverseZ =
-                                w0 / a.z
-                                + w1 / b.z
-                                + w2 / c.z;
-
-                            if (inverseZ <= 0.0) {
-                                continue;
-                            }
-
-                            z = 1.0 / inverseZ;
+                            z = 1.0 / (
+                                    w0 / a.z
+                                    + w1 / b.z
+                                    + w2 / c.z
+                                    );
 
                         } else {
 
@@ -446,14 +508,14 @@ void PolyhedronWidget::paintEvent(QPaintEvent*) {
                                 + w2 * c.z;
                         }
 
-                        const int position = y * width() + x;
-                        if (
-                            !zBufferEnabled
-                            || z < zbuf[position]
-                            ) {
+                        const int position =
+                            y * width() + x;
+
+                        if (!zBufferEnabled ||
+                            z < zBuffer[position]) {
 
                             if (zBufferEnabled) {
-                                zbuf[position] = z;
+                                zBuffer[position] = z;
                             }
 
                             image.setPixelColor(

@@ -2,7 +2,6 @@
 
 #include "../geometry/Point3D.h"
 
-// Два способа перевода 3D-точки в 2D согласно формулам из лекции.
 enum class ProjectionType {
     Perspective,
     Axonometric
